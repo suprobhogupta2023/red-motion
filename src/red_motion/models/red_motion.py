@@ -640,17 +640,32 @@ class RedMotionCrossFusion(pl.LightningModule):
         )
         self.dim_global_env_encoder = dim_global_env_decoder
 
+        # self.cross_fusion_block = CrossTransformer(
+        #     sm_dim=dim_road_env_encoder,
+        #     lg_dim=dim_global_env_decoder,
+        #     depth=num_fusion_layers,
+        #     heads=8,
+        #     dim_head=16,
+        #     dropout=0.1,
+        # )
+
+        # self.local_fusion_block = REDFusionBlock(
+        #     dim_model=dim_road_env_encoder, num_layers=num_fusion_layers
+        # )
+        # Modify the fusion block
         self.cross_fusion_block = CrossTransformer(
             sm_dim=dim_road_env_encoder,
             lg_dim=dim_global_env_decoder,
-            depth=num_fusion_layers,
-            heads=8,
-            dim_head=16,
-            dropout=0.1,
+            depth=num_fusion_layers + 1,  # Add an extra layer
+            heads=num_heads_global_env_decoder,
+            dim_head=dim_road_env_encoder // 2,  # Reduce head dimension
+            dropout=0.2,  # Increase dropout for regularization
         )
 
-        self.local_fusion_block = REDFusionBlock(
-            dim_model=dim_road_env_encoder, num_layers=num_fusion_layers
+        # Add an additional linear layer
+        self.additional_linear_layer = nn.Linear(
+            in_features=dim_road_env_encoder,
+            out_features=dim_global_env_decoder,
         )
 
         if pred_3_points:
@@ -863,11 +878,24 @@ class RedMotionCrossFusion(pl.LightningModule):
             (global_fusion_token[:, None, :], global_env_tokens), dim=1
         )
 
+        # fused_local_tokens, fused_global_tokens = self.cross_fusion_block(
+        #     fused_local_tokens, global_env_tokens
+        # )
+        # fused_tokens = torch.cat(
+        #     (fused_local_tokens, fused_global_tokens[:, 0][:, None, :]), dim=1
+        # )
+        # Modify fusion block in the forward pass
         fused_local_tokens, fused_global_tokens = self.cross_fusion_block(
             fused_local_tokens, global_env_tokens
         )
+
+        # Add the output of an additional linear layer to the fused tokens
+        additional_fused_tokens = self.additional_linear_layer(fused_tokens)
+
+        # Combine the original and additional fused tokens
         fused_tokens = torch.cat(
-            (fused_local_tokens, fused_global_tokens[:, 0][:, None, :]), dim=1
+            (fused_local_tokens, fused_global_tokens[:, 0][:, None, :], additional_fused_tokens),
+            dim=1
         )
 
         motion_embedding = self.motion_head(
